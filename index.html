@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pong</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0f;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: #fff;
+      overflow: hidden;
+    }
+
+    h1 {
+      font-size: 1rem;
+      letter-spacing: 0.5em;
+      text-transform: uppercase;
+      color: #ffffff44;
+      margin-bottom: 16px;
+    }
+
+    #canvas {
+      border: 1px solid #ffffff15;
+      border-radius: 4px;
+      box-shadow: 0 0 60px #ffffff08, 0 0 120px #ffffff04;
+    }
+
+    #controls {
+      margin-top: 16px;
+      font-size: 0.7rem;
+      color: #ffffff33;
+      letter-spacing: 0.15em;
+      text-align: center;
+      line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+  <h1>Pong</h1>
+  <canvas id="canvas" width="800" height="500"></canvas>
+  <div id="controls">
+    W / S &nbsp;—&nbsp; Left paddle &nbsp;&nbsp;|&nbsp;&nbsp; UP / DOWN &nbsp;—&nbsp; Right paddle &nbsp;&nbsp;|&nbsp;&nbsp; SPACE &nbsp;—&nbsp; Pause
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // — Config —
+    const PADDLE_W = 10;
+    const PADDLE_H = 90;
+    const PADDLE_SPEED = 6;
+    const BALL_SIZE = 10;
+    const WINNING_SCORE = 7;
+
+    // — State —
+    const state = {
+      paused: false,
+      started: false,
+      over: false,
+    };
+
+    const leftPaddle = {
+      x: 30,
+      y: H / 2 - PADDLE_H / 2,
+      score: 0,
+      up: false,
+      down: false,
+    };
+
+    const rightPaddle = {
+      x: W - 30 - PADDLE_W,
+      y: H / 2 - PADDLE_H / 2,
+      score: 0,
+      up: false,
+      down: false,
+    };
+
+    const ball = { x: 0, y: 0, vx: 0, vy: 0 };
+
+    function resetBall(serveLeft) {
+      ball.x = W / 2;
+      ball.y = H / 2;
+      const angle = (Math.random() * 40 - 20) * (Math.PI / 180);
+      const speed = 5;
+      const dir = serveLeft ? -1 : 1;
+      ball.vx = dir * speed * Math.cos(angle);
+      ball.vy = speed * Math.sin(angle);
+    }
+
+    function resetGame() {
+      leftPaddle.y = H / 2 - PADDLE_H / 2;
+      rightPaddle.y = H / 2 - PADDLE_H / 2;
+      leftPaddle.score = 0;
+      rightPaddle.score = 0;
+      state.over = false;
+      state.started = true;
+      state.paused = false;
+      resetBall(Math.random() < 0.5);
+    }
+
+    // — Input —
+    document.addEventListener('keydown', e => {
+      switch (e.code) {
+        case 'KeyW':     leftPaddle.up = true;    break;
+        case 'KeyS':     leftPaddle.down = true;  break;
+        case 'ArrowUp':  rightPaddle.up = true;   e.preventDefault(); break;
+        case 'ArrowDown':rightPaddle.down = true;  e.preventDefault(); break;
+        case 'Space':
+          if (!state.over && state.started) state.paused = !state.paused;
+          if (!state.started) resetGame();
+          e.preventDefault();
+          break;
+        case 'Enter':
+          if (state.over || !state.started) resetGame();
+          break;
+      }
+    });
+
+    document.addEventListener('keyup', e => {
+      switch (e.code) {
+        case 'KeyW':     leftPaddle.up = false;   break;
+        case 'KeyS':     leftPaddle.down = false; break;
+        case 'ArrowUp':  rightPaddle.up = false;  break;
+        case 'ArrowDown':rightPaddle.down = false; break;
+      }
+    });
+
+    // — Physics —
+    function clampPaddle(paddle) {
+      paddle.y = Math.max(0, Math.min(H - PADDLE_H, paddle.y));
+    }
+
+    function update() {
+      if (!state.started || state.paused || state.over) return;
+
+      // Move paddles
+      if (leftPaddle.up)   leftPaddle.y -= PADDLE_SPEED;
+      if (leftPaddle.down) leftPaddle.y += PADDLE_SPEED;
+      if (rightPaddle.up)   rightPaddle.y -= PADDLE_SPEED;
+      if (rightPaddle.down) rightPaddle.y += PADDLE_SPEED;
+      clampPaddle(leftPaddle);
+      clampPaddle(rightPaddle);
+
+      // Move ball
+      ball.x += ball.vx;
+      ball.y += ball.vy;
+
+      // Top / bottom wall bounce
+      if (ball.y - BALL_SIZE / 2 <= 0) {
+        ball.y = BALL_SIZE / 2;
+        ball.vy = Math.abs(ball.vy);
+      }
+      if (ball.y + BALL_SIZE / 2 >= H) {
+        ball.y = H - BALL_SIZE / 2;
+        ball.vy = -Math.abs(ball.vy);
+      }
+
+      // Paddle collision helper
+      function hitPaddle(paddle) {
+        return (
+          ball.x - BALL_SIZE / 2 < paddle.x + PADDLE_W &&
+          ball.x + BALL_SIZE / 2 > paddle.x &&
+          ball.y + BALL_SIZE / 2 > paddle.y &&
+          ball.y - BALL_SIZE / 2 < paddle.y + PADDLE_H
+        );
+      }
+
+      // Left paddle
+      if (ball.vx < 0 && hitPaddle(leftPaddle)) {
+        ball.x = leftPaddle.x + PADDLE_W + BALL_SIZE / 2;
+        const hitPos = (ball.y - (leftPaddle.y + PADDLE_H / 2)) / (PADDLE_H / 2);
+        const bounceAngle = hitPos * 60 * (Math.PI / 180);
+        const speed = Math.min(Math.hypot(ball.vx, ball.vy) * 1.05, 16);
+        ball.vx =  speed * Math.cos(bounceAngle);
+        ball.vy =  speed * Math.sin(bounceAngle);
+      }
+
+      // Right paddle
+      if (ball.vx > 0 && hitPaddle(rightPaddle)) {
+        ball.x = rightPaddle.x - BALL_SIZE / 2;
+        const hitPos = (ball.y - (rightPaddle.y + PADDLE_H / 2)) / (PADDLE_H / 2);
+        const bounceAngle = hitPos * 60 * (Math.PI / 180);
+        const speed = Math.min(Math.hypot(ball.vx, ball.vy) * 1.05, 16);
+        ball.vx = -speed * Math.cos(bounceAngle);
+        ball.vy =  speed * Math.sin(bounceAngle);
+      }
+
+      // Scoring
+      if (ball.x < 0) {
+        rightPaddle.score++;
+        if (rightPaddle.score >= WINNING_SCORE) { state.over = true; return; }
+        resetBall(false);
+      }
+      if (ball.x > W) {
+        leftPaddle.score++;
+        if (leftPaddle.score >= WINNING_SCORE) { state.over = true; return; }
+        resetBall(true);
+      }
+    }
+
+    // — Drawing —
+    function drawRect(x, y, w, h, color) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, 3);
+      ctx.fill();
+    }
+
+    function drawDashedCenter() {
+      ctx.setLineDash([8, 12]);
+      ctx.strokeStyle = '#ffffff18';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(W / 2, 0);
+      ctx.lineTo(W / 2, H);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    function drawBall() {
+      ctx.save();
+      ctx.shadowColor = '#ffffffcc';
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, BALL_SIZE / 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawPaddle(paddle) {
+      ctx.save();
+      ctx.shadowColor = '#ffffffaa';
+      ctx.shadowBlur = 14;
+      drawRect(paddle.x, paddle.y, PADDLE_W, PADDLE_H, '#ffffff');
+      ctx.restore();
+    }
+
+    function drawScore() {
+      ctx.font = 'bold 64px "Courier New", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#ffffff18';
+      ctx.fillText(leftPaddle.score,  W / 2 - 80, 24);
+      ctx.fillText(rightPaddle.score, W / 2 + 80, 24);
+    }
+
+    function drawOverlay(title, sub) {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      ctx.font = 'bold 48px "Courier New", monospace';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(title, W / 2, H / 2 - 28);
+
+      ctx.font = '14px "Courier New", monospace';
+      ctx.fillStyle = '#ffffff66';
+      ctx.fillText(sub, W / 2, H / 2 + 22);
+    }
+
+    function draw() {
+      // Background
+      ctx.fillStyle = '#0d0d14';
+      ctx.fillRect(0, 0, W, H);
+
+      drawDashedCenter();
+      drawScore();
+      drawPaddle(leftPaddle);
+      drawPaddle(rightPaddle);
+
+      if (state.started && !state.over) drawBall();
+
+      if (!state.started) {
+        drawOverlay('PONG', 'Press SPACE or ENTER to start');
+      } else if (state.over) {
+        const winner = leftPaddle.score >= WINNING_SCORE ? 'LEFT' : 'RIGHT';
+        drawOverlay(`${winner} WINS`, 'Press ENTER to play again');
+      } else if (state.paused) {
+        drawOverlay('PAUSED', 'Press SPACE to resume');
+      }
+    }
+
+    // — Loop —
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    loop();
+  </script>
+</body>
+</html>

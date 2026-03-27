@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Laser Pong</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #050510;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+      overflow: hidden;
+    }
+
+    #player-badge {
+      font-size: 0.72rem;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+      height: 1.2em;
+    }
+
+    #game-wrapper {
+      position: relative;
+      display: inline-block;
+    }
+
+    #canvas {
+      display: block;
+      border: 1px solid #ffffff12;
+      border-radius: 4px;
+    }
+
+    #restart-btn {
+      display: none;
+      position: absolute;
+      left: 50%;
+      top: 63%;
+      transform: translateX(-50%);
+      padding: 10px 36px;
+      font: bold 13px 'Courier New', monospace;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      background: transparent;
+      color: #fff;
+      border: 1.5px solid #ffffff66;
+      border-radius: 3px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s, box-shadow 0.15s, border-color 0.15s;
+    }
+    #restart-btn:hover  { background: #ffffff18; border-color: #fff; box-shadow: 0 0 22px #ffffff55; }
+    #restart-btn:active { background: #ffffff30; }
+
+    #controls {
+      margin-top: 12px;
+      font-size: 0.6rem;
+      color: #ffffff28;
+      letter-spacing: 0.12em;
+      text-align: center;
+      line-height: 2;
+    }
+  </style>
+</head>
+<body>
+  <div id="player-badge"></div>
+  <div id="game-wrapper">
+    <canvas id="canvas" width="800" height="500"></canvas>
+    <button id="restart-btn">&#9654; Play Again</button>
+  </div>
+  <div id="controls">
+    P1: W / S &nbsp;—&nbsp; Left paddle &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
+    P2: UP / DOWN &nbsp;—&nbsp; Right paddle &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
+    SPACE &nbsp;—&nbsp; Request restart
+  </div>
+
+  <!-- Socket.io is served automatically by the server -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    // ── Canvas setup ───────────────────────────────────────────────────────────
+    const canvas     = document.getElementById('canvas');
+    const ctx        = canvas.getContext('2d');
+    const restartBtn = document.getElementById('restart-btn');
+    const badge      = document.getElementById('player-badge');
+    const W = canvas.width, H = canvas.height;
+
+    // ── Client constants (mirrored from server) ────────────────────────────────
+    const PADDLE_W   = 10;
+    const LEFT_X     = 30;
+    const RIGHT_X    = W - 30 - PADDLE_W;
+    const BALL_R     = 6;
+    const TRAIL_LEN  = 32;
+    const LEFT_COLOR  = '#00ffff';
+    const RIGHT_COLOR = '#ff00bb';
+
+    // ── Client state ───────────────────────────────────────────────────────────
+    let socket       = null;
+    let myRole       = null;   // 'left' | 'right' | null
+    let serverState  = null;
+    let clientPhase  = 'connecting';   // connecting | waiting | playing | gameover | disconnected | full
+    let trail        = [];
+    let particles    = [];
+    let shake        = 0;
+    let screenFlash  = 0;
+    let lastRender   = 0;
+
+    const input = { up: false, down: false };
+    let lastSentInput = { up: false, down: false };
+
+    // ── Socket ─────────────────────────────────────────────────────────────────
+    socket = io();
+
+    socket.on('connect', () => {
+      clientPhase = 'connecting';
+    });
+
+    socket.on('assigned', ({ side, playerNumber }) => {
+      myRole = side;
+      const color = side === 'left' ? LEFT_COLOR : RIGHT_COLOR;
+      badge.style.color = color;
+      badge.textContent = `You are Player ${playerNumber}  (${side === 'left' ? 'W / S' : '↑ / ↓'})`;
+    });
+
+    socket.on('waiting', () => {
+      clientPhase = 'waiting';
+      restartBtn.style.display = 'none';
+    });
+
+    socket.on('start', () => {
+      clientPhase = 'playing';
+      trail       = [];
+      particles   = [];
+      shake       = 0;
+      screenFlash = 0;
+      restartBtn.style.display = 'none';
+    });
+
+    socket.on('state', data => {
+      // Process server events → spawn client-side particles / shake
+      if (data.events) data.events.forEach(handleEvent);
+
+      // Update trail from last known ball position
+      if (serverState?.ball && data.phase === 'playing') {
+        trail.push({ x: serverState.ball.x, y: serverState.ball.y, hue: serverState.ball.hue });
+        if (trail.length > TRAIL_LEN) trail.shift();
+      }
+
+      serverState = data;
+      if (data.phase === 'gameover') {
+        clientPhase = 'gameover';
+        restartBtn.style.display = 'block';
+      } else if (data.phase === 'playing') {
+        clientPhase = 'playing';
+      }
+    });
+
+    socket.on('playerDisconnected', () => {
+      clientPhase = 'waiting';
+      serverState = null;
+      trail       = [];
+      particles   = [];
+      restartBtn.style.display = 'none';
+    });
+
+    socket.on('full', () => {
+      clientPhase = 'full';
+    });
+
+    socket.on('playerCount', count => {
+      if (clientPhase === 'waiting') clientPhase = 'waiting';
+    });
+
+    // ── Events from server → visual effects ───────────────────────────────────
+    function handleEvent(evt) {
+      switch (evt.type) {
+        case 'paddleHit':
+          burst(evt.x, evt.y, evt.side === 'left' ? LEFT_COLOR : RIGHT_COLOR, 18, 2.5, 7, 0.1);
+          shake = 2.5;
+          break;
+        case 'wallBounce':
+          burstArc(evt.x, evt.y === 0 ? 0 : H, `hsl(${evt.hue},100%,70%)`, 10, 1.5, 4,
+            evt.y === 0 ? Math.PI * 0.5 : -Math.PI * 0.5);
+          shake = 2.5;
+          break;
+        case 'score':
+          burst(evt.side === 'right' ? 0 : W, evt.ballY,
+            evt.side === 'right' ? RIGHT_COLOR : LEFT_COLOR, 30, 3, 9, 0.15);
+          shake       = 6;
+          screenFlash = 28;
+          break;
+        case 'powerupCollected':
+          burst(evt.x, evt.y, evt.color, 20, 2, 6, 0.08);
+          screenFlash = 10;
+          break;
+      }
+    }
+
+    // ── Particle helpers ───────────────────────────────────────────────────────
+    function burst(x, y, color, count, minS, maxS, gravity = 0.12) {
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const spd   = minS + Math.random() * (maxS - minS);
+        particles.push({
+          x, y,
+          vx: Math.cos(angle) * spd,
+          vy: Math.sin(angle) * spd,
+          r:  1.5 + Math.random() * 2.5,
+          life: 1,
+          decay: 0.022 + Math.random() * 0.022,
+          color, gravity,
+        });
+      }
+    }
+
+    function burstArc(x, y, color, count, minS, maxS, dir) {
+      for (let i = 0; i < count; i++) {
+        const angle = dir + (Math.random() - 0.5) * Math.PI * 0.9;
+        const spd   = minS + Math.random() * (maxS - minS);
+        particles.push({
+          x, y,
+          vx: Math.cos(angle) * spd,
+          vy: Math.sin(angle) * spd,
+          r: 1 + Math.random() * 2,
+          life: 1,
+          decay: 0.03 + Math.random() * 0.03,
+          color, gravity: 0.06,
+        });
+      }
+    }
+
+    // ── Input ──────────────────────────────────────────────────────────────────
+    document.addEventListener('keydown', e => {
+      if (e.code === 'KeyW'      && myRole === 'left')  input.up   = true;
+      if (e.code === 'KeyS'      && myRole === 'left')  input.down = true;
+      if (e.code === 'ArrowUp'   && myRole === 'right') { input.up   = true; e.preventDefault(); }
+      if (e.code === 'ArrowDown' && myRole === 'right') { input.down = true; e.preventDefault(); }
+      if (e.code === 'Space') {
+        if (clientPhase === 'gameover') socket.emit('restart');
+        e.preventDefault();
+      }
+    });
+    document.addEventListener('keyup', e => {
+      if (e.code === 'KeyW'      ) input.up   = false;
+      if (e.code === 'KeyS'      ) input.down = false;
+      if (e.code === 'ArrowUp'   ) input.up   = false;
+      if (e.code === 'ArrowDown' ) input.down = false;
+    });
+
+    // Send input to server only when it changes
+    setInterval(() => {
+      if (!socket || !myRole) return;
+      if (input.up !== lastSentInput.up || input.down !== lastSentInput.down) {
+        socket.emit('input', { ...input });
+        lastSentInput = { ...input };
+      }
+    }, 16);
+
+    restartBtn.addEventListener('click', () => socket.emit('restart'));
+
+    // ── Render ─────────────────────────────────────────────────────────────────
+    function drawBg(now) {
+      if (screenFlash > 0) {
+        ctx.fillStyle = `rgba(255,255,255,${screenFlash * 0.011})`;
+        ctx.fillRect(0, 0, W, H);
+        screenFlash--;
+      }
+      ctx.fillStyle = 'rgba(5,5,16,0.80)';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    function drawCenter(hue) {
+      ctx.save();
+      ctx.setLineDash([6, 14]);
+      ctx.strokeStyle = `hsla(${hue},80%,65%,0.2)`;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = `hsl(${hue},100%,70%)`;
+      ctx.shadowBlur  = 10;
+      ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawPaddle(x, pd, baseColor, now) {
+      const color = pd.fx.grow ? '#00ff88' : pd.fx.shrink ? '#ff4455' : baseColor;
+      const pulse  = 20 + 7 * Math.sin(now * 0.003 + (x === LEFT_X ? 0 : Math.PI));
+      const flash  = pd.hitFlash > 0 ? (pd.hitFlash / 12) * 30 : 0;
+
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur  = pulse + flash;
+      ctx.fillStyle   = color;
+      ctx.beginPath();
+      ctx.roundRect(x, pd.y, PADDLE_W, pd.h, 3);
+      ctx.fill();
+
+      if (pd.hitFlash > 0) {
+        ctx.globalAlpha = (pd.hitFlash / 12) * 0.7;
+        ctx.fillStyle = '#fff';
+        ctx.beginPath(); ctx.roundRect(x, pd.y, PADDLE_W, pd.h, 3); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      ctx.shadowBlur = 0;
+      ctx.fillStyle  = '#ffffffbb';
+      ctx.beginPath();
+      ctx.roundRect(x + 2, pd.y + 6, PADDLE_W - 4, pd.h - 12, 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawTrail(ball) {
+      const isLaser = !!ball.fx.laser;
+      trail.forEach((pt, i) => {
+        const t = i / trail.length;
+        const r = BALL_R * t * (isLaser ? 2 : 1);
+        ctx.save();
+        ctx.globalAlpha = t * (isLaser ? 0.85 : 0.5);
+        if (isLaser) {
+          ctx.shadowColor = `hsl(${pt.hue},100%,65%)`;
+          ctx.shadowBlur  = 20;
+          ctx.fillStyle   = `hsl(${pt.hue},100%,65%)`;
+        } else {
+          ctx.fillStyle = `hsla(${pt.hue},90%,65%,1)`;
+        }
+        ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      });
+    }
+
+    function drawBall(ball) {
+      const isLaser = !!ball.fx.laser;
+      const hue     = ball.fx.slow ? 200 : ball.fx.speed ? 40 : ball.hue;
+      const color   = `hsl(${hue},100%,68%)`;
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur  = isLaser ? 40 : 26;
+      ctx.fillStyle   = color;
+      ctx.beginPath(); ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0; ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.arc(ball.x, ball.y, BALL_R * 0.42, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
+    function drawParticles() {
+      for (const p of particles) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, p.life);
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur  = 8;
+        ctx.fillStyle   = p.color;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r * p.life, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    function drawScore(paddles) {
+      ctx.save();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.font = 'bold 72px "Courier New", monospace';
+      ctx.shadowBlur  = 28;
+      ctx.shadowColor = LEFT_COLOR;  ctx.fillStyle = LEFT_COLOR  + '28'; ctx.fillText(paddles.left.score,  W/2 - 90, 14);
+      ctx.shadowColor = RIGHT_COLOR; ctx.fillStyle = RIGHT_COLOR + '28'; ctx.fillText(paddles.right.score, W/2 + 90, 14);
+      ctx.font = '10px "Courier New", monospace'; ctx.shadowBlur = 0;
+      ctx.fillStyle = LEFT_COLOR  + '66'; ctx.fillText('P1', W/2 - 90, 90);
+      ctx.fillStyle = RIGHT_COLOR + '66'; ctx.fillText('P2', W/2 + 90, 90);
+      ctx.restore();
+    }
+
+    function drawPowerups(powerups) {
+      for (const p of powerups) {
+        const pulse = 0.75 + 0.25 * Math.sin(p.age * 0.005);
+        const fade  = Math.min(1, (p.life - p.age) / 1200);
+        ctx.save();
+        ctx.globalAlpha = fade;
+        ctx.shadowColor = p.glow; ctx.shadowBlur = 24 * pulse;
+        ctx.strokeStyle = p.color; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r * pulse, 0, Math.PI * 2); ctx.stroke();
+        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
+        g.addColorStop(0, p.color + 'cc'); g.addColorStop(1, p.glow + '11');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.font = `${Math.round(p.r * 1.05)}px serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#fff'; ctx.fillText(p.icon, p.x, p.y + 1);
+        ctx.restore();
+      }
+    }
+
+    function drawHud(ball, paddles) {
+      const items = [
+        ball.fx.speed         && { label: '⚡ SPEED',    color: '#ffdd00', t: ball.fx.speed         },
+        ball.fx.slow          && { label: '❄ SLOW',     color: '#44ddff', t: ball.fx.slow           },
+        ball.fx.laser         && { label: '✦ LASER',    color: '#dd44ff', t: ball.fx.laser          },
+        paddles.left.fx.grow  && { label: '▲ P1 GROW',  color: '#00ff88', t: paddles.left.fx.grow   },
+        paddles.left.fx.shrink  && { label: '▼ P1 SHRINK',color: '#ff4455', t: paddles.left.fx.shrink  },
+        paddles.right.fx.grow   && { label: '▲ P2 GROW',  color: '#00ff88', t: paddles.right.fx.grow   },
+        paddles.right.fx.shrink && { label: '▼ P2 SHRINK',color: '#ff4455', t: paddles.right.fx.shrink },
+      ].filter(Boolean);
+
+      ctx.save();
+      ctx.font = '10px "Courier New", monospace'; ctx.textBaseline = 'middle';
+      items.forEach((b, i) => {
+        const x = 8 + i * 112, y = H - 18;
+        ctx.fillStyle = b.color + '20'; ctx.fillRect(x, y - 10, 104, 20);
+        ctx.fillStyle = b.color; ctx.textAlign = 'left';
+        ctx.fillText(`${b.label} ${(b.t / 1000).toFixed(1)}s`, x + 5, y);
+      });
+      ctx.restore();
+    }
+
+    function drawOverlay(title, sub, color = '#fff') {
+      ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(0, 0, W, H);
+      ctx.save();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.shadowColor = color; ctx.shadowBlur = 38;
+      ctx.font = 'bold 52px "Courier New", monospace';
+      ctx.fillStyle = color; ctx.fillText(title, W/2, H/2 - 34);
+      ctx.restore();
+      ctx.font = '13px "Courier New", monospace';
+      ctx.fillStyle = '#ffffff44'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(sub, W/2, H/2 + 20);
+    }
+
+    // ── Main render loop ───────────────────────────────────────────────────────
+    function render(now) {
+      requestAnimationFrame(render);
+
+      // Tick client-side particles + shake
+      for (const p of particles) {
+        p.x += p.vx; p.y += p.vy; p.vy += p.gravity; p.vx *= 0.97; p.life -= p.decay;
+      }
+      particles = particles.filter(p => p.life > 0);
+      if (shake > 0) shake = Math.max(0, shake - 0.6);
+
+      drawBg(now);
+
+      // ── Connecting ──
+      if (clientPhase === 'connecting') {
+        drawOverlay('CONNECTING…', '', LEFT_COLOR);
+        return;
+      }
+
+      // ── Full ──
+      if (clientPhase === 'full') {
+        drawOverlay('GAME FULL', 'Two players are already playing. Try again later.');
+        return;
+      }
+
+      // ── Disconnected ──
+      if (clientPhase === 'disconnected') {
+        drawOverlay('DISCONNECTED', 'Reload the page to reconnect.');
+        return;
+      }
+
+      // Use last known state for background drawing even while waiting
+      const s = serverState;
+      const hue = s?.ball?.hue ?? 120;
+
+      ctx.save();
+      if (shake > 0.3) ctx.translate((Math.random() - 0.5) * shake * 2, (Math.random() - 0.5) * shake * 2);
+
+      drawCenter(hue);
+      if (s) {
+        drawScore(s.paddles);
+        drawPaddle(LEFT_X,  s.paddles.left,  LEFT_COLOR,  now);
+        drawPaddle(RIGHT_X, s.paddles.right, RIGHT_COLOR, now);
+      }
+
+      if (s && clientPhase === 'playing') {
+        drawPowerups(s.powerups);
+        drawTrail(s.ball);
+        drawBall(s.ball);
+        drawParticles();
+        drawHud(s.ball, s.paddles);
+      } else {
+        drawParticles();
+      }
+
+      ctx.restore();
+
+      // ── Overlays (no shake) ──
+      if (clientPhase === 'waiting') {
+        drawOverlay('LASER PONG', 'Waiting for second player…', LEFT_COLOR);
+      } else if (clientPhase === 'gameover' && s) {
+        const isLeft = s.winner === 'left';
+        const youWon = myRole === s.winner;
+        const color  = isLeft ? LEFT_COLOR : RIGHT_COLOR;
+        drawOverlay(
+          `${isLeft ? 'P1' : 'P2'} WINS!`,
+          youWon ? '🏆  You win!  Click Play Again or press SPACE' : 'You lose.  Opponent can restart.',
+          color
+        );
+      }
+    }
+
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>

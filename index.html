@@ -3,48 +3,39 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Pong</title>
+  <title>Laser Pong</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-
     body {
-      background: #0a0a0f;
+      background: #050510;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       height: 100vh;
       font-family: 'Courier New', monospace;
-      color: #fff;
       overflow: hidden;
     }
-
     h1 {
-      font-size: 1rem;
-      letter-spacing: 0.5em;
+      font-size: 0.9rem;
+      letter-spacing: 0.6em;
       text-transform: uppercase;
-      color: #ffffff44;
-      margin-bottom: 16px;
-    }
-
-    #canvas {
-      border: 1px solid #ffffff15;
-      border-radius: 4px;
-      box-shadow: 0 0 60px #ffffff08, 0 0 120px #ffffff04;
-    }
-
-    #controls {
-      margin-top: 16px;
-      font-size: 0.7rem;
       color: #ffffff33;
-      letter-spacing: 0.15em;
+      margin-bottom: 14px;
+    }
+    #canvas { border: 1px solid #ffffff12; border-radius: 4px; }
+    #controls {
+      margin-top: 14px;
+      font-size: 0.65rem;
+      color: #ffffff30;
+      letter-spacing: 0.12em;
       text-align: center;
-      line-height: 1.8;
+      line-height: 2;
     }
   </style>
 </head>
 <body>
-  <h1>Pong</h1>
+  <h1>Laser Pong</h1>
   <canvas id="canvas" width="800" height="500"></canvas>
   <div id="controls">
     W / S &nbsp;—&nbsp; Left paddle &nbsp;&nbsp;|&nbsp;&nbsp; UP / DOWN &nbsp;—&nbsp; Right paddle &nbsp;&nbsp;|&nbsp;&nbsp; SPACE &nbsp;—&nbsp; Pause
@@ -53,57 +44,72 @@
   <script>
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
-
-    const W = canvas.width;
-    const H = canvas.height;
+    const W = canvas.width, H = canvas.height;
 
     // — Config —
-    const PADDLE_W = 10;
-    const PADDLE_H = 90;
-    const PADDLE_SPEED = 6;
-    const BALL_SIZE = 10;
+    const PADDLE_W      = 10;
+    const BASE_H        = 90;
+    const PADDLE_SPEED  = 6;
+    const BALL_R        = 6;
     const WINNING_SCORE = 7;
+    const TRAIL_LEN     = 28;
+    const SPAWN_INTERVAL = 7000;
+
+    const LEFT_COLOR  = '#00ffff';
+    const RIGHT_COLOR = '#ff00bb';
 
     // — State —
-    const state = {
-      paused: false,
-      started: false,
-      over: false,
-    };
+    const state = { paused: false, started: false, over: false, flash: 0 };
 
-    const leftPaddle = {
-      x: 30,
-      y: H / 2 - PADDLE_H / 2,
-      score: 0,
-      up: false,
-      down: false,
-    };
+    const leftPaddle  = { x: 30,             y: 0, h: BASE_H, score: 0, up: false, down: false, fx: {} };
+    const rightPaddle = { x: W - 30 - PADDLE_W, y: 0, h: BASE_H, score: 0, up: false, down: false, fx: {} };
+    const ball = { x: 0, y: 0, vx: 0, vy: 0, hue: 0, trail: [], lastSide: 'left', fx: {} };
 
-    const rightPaddle = {
-      x: W - 30 - PADDLE_W,
-      y: H / 2 - PADDLE_H / 2,
-      score: 0,
-      up: false,
-      down: false,
-    };
+    let powerups = [];
+    let spawnTimer = SPAWN_INTERVAL * 0.55; // first powerup appears ~3s in
+    let lastTime = 0;
 
-    const ball = { x: 0, y: 0, vx: 0, vy: 0 };
+    // — Power-up definitions —
+    const PU = [
+      { id: 'speed',  icon: '⚡', color: '#ffdd00', glow: '#ff8800', dur: 5000 },
+      { id: 'slow',   icon: '❄',  color: '#44ddff', glow: '#0066ff', dur: 6000 },
+      { id: 'grow',   icon: '▲',  color: '#00ff88', glow: '#00cc44', dur: 7000 },
+      { id: 'shrink', icon: '▼',  color: '#ff4455', glow: '#cc0022', dur: 5000 },
+      { id: 'laser',  icon: '✦',  color: '#dd44ff', glow: '#8800ff', dur: 6000 },
+    ];
+
+    function spawnPowerup() {
+      const def = PU[Math.floor(Math.random() * PU.length)];
+      powerups.push({
+        ...def,
+        x: W / 2 + (Math.random() - 0.5) * 320,
+        y: 60 + Math.random() * (H - 120),
+        r: 21,
+        age: 0,
+        life: 9000,
+      });
+    }
 
     function resetBall(serveLeft) {
       ball.x = W / 2;
       ball.y = H / 2;
+      ball.trail = [];
+      ball.fx = {};
       const angle = (Math.random() * 40 - 20) * (Math.PI / 180);
       const speed = 5;
-      const dir = serveLeft ? -1 : 1;
-      ball.vx = dir * speed * Math.cos(angle);
+      ball.vx = (serveLeft ? -1 : 1) * speed * Math.cos(angle);
       ball.vy = speed * Math.sin(angle);
     }
 
     function resetGame() {
-      leftPaddle.y = H / 2 - PADDLE_H / 2;
-      rightPaddle.y = H / 2 - PADDLE_H / 2;
-      leftPaddle.score = 0;
-      rightPaddle.score = 0;
+      for (const p of [leftPaddle, rightPaddle]) {
+        p.y = H / 2 - BASE_H / 2;
+        p.h = BASE_H;
+        p.score = 0;
+        p.fx = {};
+      }
+      powerups = [];
+      spawnTimer = SPAWN_INTERVAL * 0.55;
       state.over = false;
       state.started = true;
       state.paused = false;
@@ -113,196 +119,360 @@
     // — Input —
     document.addEventListener('keydown', e => {
       switch (e.code) {
-        case 'KeyW':     leftPaddle.up = true;    break;
-        case 'KeyS':     leftPaddle.down = true;  break;
-        case 'ArrowUp':  rightPaddle.up = true;   e.preventDefault(); break;
-        case 'ArrowDown':rightPaddle.down = true;  e.preventDefault(); break;
+        case 'KeyW':      leftPaddle.up    = true; break;
+        case 'KeyS':      leftPaddle.down  = true; break;
+        case 'ArrowUp':   rightPaddle.up   = true; e.preventDefault(); break;
+        case 'ArrowDown': rightPaddle.down = true; e.preventDefault(); break;
         case 'Space':
           if (!state.over && state.started) state.paused = !state.paused;
           if (!state.started) resetGame();
-          e.preventDefault();
-          break;
+          e.preventDefault(); break;
         case 'Enter':
-          if (state.over || !state.started) resetGame();
-          break;
+          if (state.over || !state.started) resetGame(); break;
       }
     });
-
     document.addEventListener('keyup', e => {
       switch (e.code) {
-        case 'KeyW':     leftPaddle.up = false;   break;
-        case 'KeyS':     leftPaddle.down = false; break;
-        case 'ArrowUp':  rightPaddle.up = false;  break;
-        case 'ArrowDown':rightPaddle.down = false; break;
+        case 'KeyW':      leftPaddle.up    = false; break;
+        case 'KeyS':      leftPaddle.down  = false; break;
+        case 'ArrowUp':   rightPaddle.up   = false; break;
+        case 'ArrowDown': rightPaddle.down = false; break;
       }
     });
 
-    // — Physics —
-    function clampPaddle(paddle) {
-      paddle.y = Math.max(0, Math.min(H - PADDLE_H, paddle.y));
+    // — Apply power-up on collection —
+    function applyPowerup(def, now) {
+      const attacker = ball.lastSide === 'left' ? leftPaddle : rightPaddle;
+      const defender = ball.lastSide === 'left' ? rightPaddle : leftPaddle;
+      switch (def.id) {
+        case 'speed':  ball.fx.speed  = now + def.dur; break;
+        case 'slow':   ball.fx.slow   = now + def.dur; break;
+        case 'grow':   attacker.fx.grow   = now + def.dur; break;
+        case 'shrink': defender.fx.shrink = now + def.dur; break;
+        case 'laser':  ball.fx.laser  = now + def.dur; break;
+      }
+      state.flash = 12;
     }
 
-    function update() {
-      if (!state.started || state.paused || state.over) return;
+    // — Tick effects (expire + resize paddles) —
+    function tickFx(now) {
+      for (const k of Object.keys(ball.fx)) if (ball.fx[k] < now) delete ball.fx[k];
+      for (const paddle of [leftPaddle, rightPaddle]) {
+        for (const k of Object.keys(paddle.fx)) if (paddle.fx[k] < now) delete paddle.fx[k];
+        paddle.h = paddle.fx.grow ? BASE_H * 1.75 : paddle.fx.shrink ? BASE_H * 0.45 : BASE_H;
+      }
+    }
 
-      // Move paddles
-      if (leftPaddle.up)   leftPaddle.y -= PADDLE_SPEED;
-      if (leftPaddle.down) leftPaddle.y += PADDLE_SPEED;
+    function clamp(paddle) {
+      paddle.y = Math.max(0, Math.min(H - paddle.h, paddle.y));
+    }
+
+    function hits(paddle) {
+      return (
+        ball.x - BALL_R < paddle.x + PADDLE_W &&
+        ball.x + BALL_R > paddle.x &&
+        ball.y + BALL_R > paddle.y &&
+        ball.y - BALL_R < paddle.y + paddle.h
+      );
+    }
+
+    // — Update —
+    function update(dt, now) {
+      if (!state.started || state.paused || state.over) return;
+      dt = Math.min(dt, 50); // cap on tab-switch lag
+
+      tickFx(now);
+
+      // Power-up spawn / expire
+      spawnTimer += dt;
+      if (spawnTimer >= SPAWN_INTERVAL && powerups.length < 3) {
+        spawnPowerup();
+        spawnTimer = 0;
+      }
+      powerups = powerups.filter(p => { p.age += dt; return p.age < p.life; });
+
+      // Paddles
+      if (leftPaddle.up)    leftPaddle.y  -= PADDLE_SPEED;
+      if (leftPaddle.down)  leftPaddle.y  += PADDLE_SPEED;
       if (rightPaddle.up)   rightPaddle.y -= PADDLE_SPEED;
       if (rightPaddle.down) rightPaddle.y += PADDLE_SPEED;
-      clampPaddle(leftPaddle);
-      clampPaddle(rightPaddle);
+      clamp(leftPaddle);
+      clamp(rightPaddle);
+
+      // Ball trail
+      ball.trail.push({ x: ball.x, y: ball.y, hue: ball.hue });
+      if (ball.trail.length > TRAIL_LEN) ball.trail.shift();
 
       // Move ball
-      ball.x += ball.vx;
-      ball.y += ball.vy;
+      const mult = ball.fx.speed ? 1.65 : ball.fx.slow ? 0.5 : 1;
+      ball.x += ball.vx * mult;
+      ball.y += ball.vy * mult;
+      ball.hue = (ball.hue + 2.5) % 360;
 
-      // Top / bottom wall bounce
-      if (ball.y - BALL_SIZE / 2 <= 0) {
-        ball.y = BALL_SIZE / 2;
-        ball.vy = Math.abs(ball.vy);
-      }
-      if (ball.y + BALL_SIZE / 2 >= H) {
-        ball.y = H - BALL_SIZE / 2;
-        ball.vy = -Math.abs(ball.vy);
-      }
+      // Wall bounce
+      if (ball.y - BALL_R <= 0) { ball.y = BALL_R;      ball.vy =  Math.abs(ball.vy); }
+      if (ball.y + BALL_R >= H) { ball.y = H - BALL_R;  ball.vy = -Math.abs(ball.vy); }
 
-      // Paddle collision helper
-      function hitPaddle(paddle) {
-        return (
-          ball.x - BALL_SIZE / 2 < paddle.x + PADDLE_W &&
-          ball.x + BALL_SIZE / 2 > paddle.x &&
-          ball.y + BALL_SIZE / 2 > paddle.y &&
-          ball.y - BALL_SIZE / 2 < paddle.y + PADDLE_H
-        );
+      // Paddle bounce
+      if (ball.vx < 0 && hits(leftPaddle)) {
+        ball.x = leftPaddle.x + PADDLE_W + BALL_R;
+        const t = (ball.y - (leftPaddle.y + leftPaddle.h / 2)) / (leftPaddle.h / 2);
+        const a = t * 60 * Math.PI / 180;
+        const s = Math.min(Math.hypot(ball.vx, ball.vy) * 1.05, 16);
+        ball.vx =  s * Math.cos(a);
+        ball.vy =  s * Math.sin(a);
+        ball.lastSide = 'left';
       }
-
-      // Left paddle
-      if (ball.vx < 0 && hitPaddle(leftPaddle)) {
-        ball.x = leftPaddle.x + PADDLE_W + BALL_SIZE / 2;
-        const hitPos = (ball.y - (leftPaddle.y + PADDLE_H / 2)) / (PADDLE_H / 2);
-        const bounceAngle = hitPos * 60 * (Math.PI / 180);
-        const speed = Math.min(Math.hypot(ball.vx, ball.vy) * 1.05, 16);
-        ball.vx =  speed * Math.cos(bounceAngle);
-        ball.vy =  speed * Math.sin(bounceAngle);
+      if (ball.vx > 0 && hits(rightPaddle)) {
+        ball.x = rightPaddle.x - BALL_R;
+        const t = (ball.y - (rightPaddle.y + rightPaddle.h / 2)) / (rightPaddle.h / 2);
+        const a = t * 60 * Math.PI / 180;
+        const s = Math.min(Math.hypot(ball.vx, ball.vy) * 1.05, 16);
+        ball.vx = -s * Math.cos(a);
+        ball.vy =  s * Math.sin(a);
+        ball.lastSide = 'right';
       }
 
-      // Right paddle
-      if (ball.vx > 0 && hitPaddle(rightPaddle)) {
-        ball.x = rightPaddle.x - BALL_SIZE / 2;
-        const hitPos = (ball.y - (rightPaddle.y + PADDLE_H / 2)) / (PADDLE_H / 2);
-        const bounceAngle = hitPos * 60 * (Math.PI / 180);
-        const speed = Math.min(Math.hypot(ball.vx, ball.vy) * 1.05, 16);
-        ball.vx = -speed * Math.cos(bounceAngle);
-        ball.vy =  speed * Math.sin(bounceAngle);
-      }
+      // Collect power-ups
+      powerups = powerups.filter(p => {
+        if (Math.hypot(ball.x - p.x, ball.y - p.y) < BALL_R + p.r) {
+          applyPowerup(p, now);
+          return false;
+        }
+        return true;
+      });
 
-      // Scoring
+      // Score
       if (ball.x < 0) {
         rightPaddle.score++;
+        state.flash = 24;
         if (rightPaddle.score >= WINNING_SCORE) { state.over = true; return; }
         resetBall(false);
       }
       if (ball.x > W) {
         leftPaddle.score++;
+        state.flash = 24;
         if (leftPaddle.score >= WINNING_SCORE) { state.over = true; return; }
         resetBall(true);
       }
     }
 
-    // — Drawing —
-    function drawRect(x, y, w, h, color) {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.roundRect(x, y, w, h, 3);
-      ctx.fill();
+    // — Draw helpers —
+    function drawBg() {
+      if (state.flash > 0) {
+        ctx.fillStyle = `rgba(255,255,255,${state.flash * 0.012})`;
+        ctx.fillRect(0, 0, W, H);
+        state.flash--;
+      }
+      // Motion-blur fade instead of full clear = glow trails on walls
+      ctx.fillStyle = 'rgba(5,5,16,0.82)';
+      ctx.fillRect(0, 0, W, H);
     }
 
-    function drawDashedCenter() {
-      ctx.setLineDash([8, 12]);
-      ctx.strokeStyle = '#ffffff18';
+    function drawCenter() {
+      ctx.save();
+      ctx.setLineDash([6, 14]);
+      ctx.strokeStyle = `hsla(${ball.hue}, 80%, 65%, 0.22)`;
       ctx.lineWidth = 2;
+      ctx.shadowColor = `hsl(${ball.hue}, 100%, 70%)`;
+      ctx.shadowBlur = 10;
       ctx.beginPath();
       ctx.moveTo(W / 2, 0);
       ctx.lineTo(W / 2, H);
       ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.restore();
     }
 
-    function drawBall() {
+    function drawPaddle(paddle, baseColor) {
+      const color = paddle.fx.grow ? '#00ff88' : paddle.fx.shrink ? '#ff4455' : baseColor;
       ctx.save();
-      ctx.shadowColor = '#ffffffcc';
-      ctx.shadowBlur = 18;
-      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 22;
+      ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(ball.x, ball.y, BALL_SIZE / 2, 0, Math.PI * 2);
+      ctx.roundRect(paddle.x, paddle.y, PADDLE_W, paddle.h, 3);
+      ctx.fill();
+      // Bright core stripe
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#ffffffcc';
+      ctx.beginPath();
+      ctx.roundRect(paddle.x + 2, paddle.y + 6, PADDLE_W - 4, paddle.h - 12, 2);
       ctx.fill();
       ctx.restore();
     }
 
-    function drawPaddle(paddle) {
+    function drawTrail() {
+      const isLaser = !!ball.fx.laser;
+      ball.trail.forEach((pt, i) => {
+        const t = i / ball.trail.length;
+        ctx.save();
+        ctx.globalAlpha = t * (isLaser ? 0.8 : 0.45);
+        const r = BALL_R * t * (isLaser ? 1.8 : 0.9);
+        if (isLaser) {
+          ctx.shadowColor = `hsl(${pt.hue}, 100%, 65%)`;
+          ctx.shadowBlur = 18;
+          ctx.fillStyle = `hsl(${pt.hue}, 100%, 65%)`;
+        } else {
+          ctx.fillStyle = `hsla(${pt.hue}, 90%, 65%, 1)`;
+        }
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      });
+    }
+
+    function drawBall() {
+      const isLaser = !!ball.fx.laser;
+      const isFast  = !!ball.fx.speed;
+      const isSlow  = !!ball.fx.slow;
+      const hue = isSlow ? 200 : isFast ? 40 : ball.hue;
+      const color = `hsl(${hue}, 100%, 68%)`;
+
       ctx.save();
-      ctx.shadowColor = '#ffffffaa';
-      ctx.shadowBlur = 14;
-      drawRect(paddle.x, paddle.y, PADDLE_W, PADDLE_H, '#ffffff');
+      ctx.shadowColor = color;
+      ctx.shadowBlur = isLaser ? 38 : 24;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2);
+      ctx.fill();
+      // White hot center
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, BALL_R * 0.42, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
     }
 
     function drawScore() {
-      ctx.font = 'bold 64px "Courier New", monospace';
+      ctx.save();
+      ctx.font = 'bold 72px "Courier New", monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillStyle = '#ffffff18';
-      ctx.fillText(leftPaddle.score,  W / 2 - 80, 24);
-      ctx.fillText(rightPaddle.score, W / 2 + 80, 24);
+      ctx.shadowBlur = 24;
+
+      ctx.shadowColor = LEFT_COLOR;
+      ctx.fillStyle = LEFT_COLOR + '28';
+      ctx.fillText(leftPaddle.score, W / 2 - 88, 16);
+
+      ctx.shadowColor = RIGHT_COLOR;
+      ctx.fillStyle = RIGHT_COLOR + '28';
+      ctx.fillText(rightPaddle.score, W / 2 + 88, 16);
+      ctx.restore();
     }
 
-    function drawOverlay(title, sub) {
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillRect(0, 0, W, H);
+    function drawPowerups(now) {
+      powerups.forEach(p => {
+        const pulse = 0.75 + 0.25 * Math.sin(p.age * 0.005);
+        const fade  = Math.min(1, (p.life - p.age) / 1200);
+        ctx.save();
+        ctx.globalAlpha = fade;
+        ctx.shadowColor = p.glow;
+        ctx.shadowBlur  = 24 * pulse;
+        // Ring
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r * pulse, 0, Math.PI * 2);
+        ctx.stroke();
+        // Fill
+        const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
+        g.addColorStop(0, p.color + 'cc');
+        g.addColorStop(1, p.glow + '11');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+        // Icon
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = fade;
+        ctx.font = `${Math.round(p.r * 1.05)}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#fff';
+        ctx.fillText(p.icon, p.x, p.y + 1);
+        ctx.restore();
+      });
+    }
 
+    function drawHud(now) {
+      const active = [
+        ball.fx.speed  && { label: '⚡ SPEED',  color: '#ffdd00', t: ball.fx.speed  - now },
+        ball.fx.slow   && { label: '❄ SLOW',   color: '#44ddff', t: ball.fx.slow   - now },
+        ball.fx.laser  && { label: '✦ LASER',  color: '#dd44ff', t: ball.fx.laser  - now },
+        leftPaddle.fx.grow    && { label: '▲ L.GROW',   color: '#00ff88', t: leftPaddle.fx.grow    - now },
+        leftPaddle.fx.shrink  && { label: '▼ L.SHRINK', color: '#ff4455', t: leftPaddle.fx.shrink  - now },
+        rightPaddle.fx.grow   && { label: '▲ R.GROW',   color: '#00ff88', t: rightPaddle.fx.grow   - now },
+        rightPaddle.fx.shrink && { label: '▼ R.SHRINK', color: '#ff4455', t: rightPaddle.fx.shrink - now },
+      ].filter(Boolean);
+
+      ctx.save();
+      ctx.font = '10px "Courier New", monospace';
+      ctx.textBaseline = 'middle';
+      active.forEach((b, i) => {
+        const x = 8 + i * 108;
+        const y = H - 18;
+        ctx.fillStyle = b.color + '22';
+        ctx.fillRect(x, y - 10, 100, 20);
+        ctx.fillStyle = b.color;
+        ctx.textAlign = 'left';
+        ctx.fillText(`${b.label} ${(b.t / 1000).toFixed(1)}s`, x + 4, y);
+      });
+      ctx.restore();
+    }
+
+    function drawOverlay(title, sub, color = '#ffffff') {
+      ctx.fillStyle = 'rgba(0,0,0,0.62)';
+      ctx.fillRect(0, 0, W, H);
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-
-      ctx.font = 'bold 48px "Courier New", monospace';
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(title, W / 2, H / 2 - 28);
-
-      ctx.font = '14px "Courier New", monospace';
-      ctx.fillStyle = '#ffffff66';
-      ctx.fillText(sub, W / 2, H / 2 + 22);
+      ctx.save();
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 36;
+      ctx.font = 'bold 52px "Courier New", monospace';
+      ctx.fillStyle = color;
+      ctx.fillText(title, W / 2, H / 2 - 30);
+      ctx.restore();
+      ctx.font = '13px "Courier New", monospace';
+      ctx.fillStyle = '#ffffff44';
+      ctx.fillText(sub, W / 2, H / 2 + 24);
     }
 
-    function draw() {
-      // Background
-      ctx.fillStyle = '#0d0d14';
-      ctx.fillRect(0, 0, W, H);
-
-      drawDashedCenter();
+    function draw(now) {
+      drawBg();
+      drawCenter();
       drawScore();
-      drawPaddle(leftPaddle);
-      drawPaddle(rightPaddle);
+      drawPaddle(leftPaddle, LEFT_COLOR);
+      drawPaddle(rightPaddle, RIGHT_COLOR);
 
-      if (state.started && !state.over) drawBall();
+      if (state.started && !state.over) {
+        drawPowerups(now);
+        drawTrail();
+        drawBall();
+        drawHud(now);
+      }
 
       if (!state.started) {
-        drawOverlay('PONG', 'Press SPACE or ENTER to start');
+        drawOverlay('LASER PONG', 'Press SPACE or ENTER to start', LEFT_COLOR);
       } else if (state.over) {
-        const winner = leftPaddle.score >= WINNING_SCORE ? 'LEFT' : 'RIGHT';
-        drawOverlay(`${winner} WINS`, 'Press ENTER to play again');
+        const isLeft = leftPaddle.score >= WINNING_SCORE;
+        drawOverlay(`${isLeft ? 'LEFT' : 'RIGHT'} WINS!`, 'Press ENTER to play again', isLeft ? LEFT_COLOR : RIGHT_COLOR);
       } else if (state.paused) {
         drawOverlay('PAUSED', 'Press SPACE to resume');
       }
     }
 
     // — Loop —
-    function loop() {
-      update();
-      draw();
+    function loop(now) {
+      const dt = now - lastTime;
+      lastTime = now;
+      update(dt, now);
+      draw(now);
       requestAnimationFrame(loop);
     }
 
-    loop();
+    requestAnimationFrame(t => { lastTime = t; requestAnimationFrame(loop); });
   </script>
 </body>
 </html>

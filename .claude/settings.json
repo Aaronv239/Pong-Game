@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd \"C:/Users/aaron/Documents/Pong-game\" && git add -A && git diff --cached --quiet || (git commit -m \"Auto-commit after task\" && git push)",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
